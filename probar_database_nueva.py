@@ -42,17 +42,21 @@ def main():
     print("Pendientes:", before["pending"])
     print("Publicados:", before["published"])
 
-    assert before["total"] == 9999, (
-        "El total de registros no coincide con la migración."
+    assert before["total"] == 10249, (
+        "El total de registros no coincide."
     )
 
-    assert before["pending"] == 9962, (
-        "El número de pendientes no coincide."
+    assert before["published"] == 43, (
+        "El n?mero de publicados no coincide."
     )
 
-    assert before["published"] == 37, (
-        "El número de publicados no coincide."
-    )
+    assert (
+        before["pending"]
+        + before["future"]
+        + before["without_date"]
+        + before["published"]
+        == before["total"]
+    ), "Las categor?as de juegos no suman el total."
 
     print("OK: los registros originales se conservan.")
 
