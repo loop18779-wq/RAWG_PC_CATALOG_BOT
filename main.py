@@ -2,16 +2,12 @@
 import asyncio
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from urllib.parse import urlparse
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-
-import database
-import rawg_catalog
-from publisher import publish, next_time
 from config import (
     BOT_TOKEN,
     TIMEZONE,
@@ -19,12 +15,21 @@ from config import (
     CHANNEL_ID,
     ADMIN_SETUP_CODE,
 )
+import database_nueva as database
+import rawg_catalog
+import igdb_catalog
+
+from publisher import publish, next_time
+
+
+
 
 # --------------------------------------------------
 # CONFIGURACIÓN GENERAL
 # --------------------------------------------------
 
 ROOT = Path(__file__).resolve().parent
+
 (ROOT / "logs").mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
@@ -39,7 +44,8 @@ logging.basicConfig(
     ]
 )
 
-log = logging.getLogger("rawg_catalog")
+log = logging.getLogger("pc_game_catalog")
+
 TZ = ZoneInfo(TIMEZONE)
 
 
@@ -48,6 +54,7 @@ TZ = ZoneInfo(TIMEZONE)
 # --------------------------------------------------
 
 def is_private(update):
+
     return (
         update.effective_chat is not None
         and update.effective_chat.type == "private"
@@ -58,18 +65,24 @@ def is_private(update):
 # COMANDO /START
 # --------------------------------------------------
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if not is_private(update):
         return
 
     uid = update.effective_user.id
+
     admin = database.setting("admin_chat_id")
 
     if admin and admin != str(uid):
+
         await update.message.reply_text(
             "Este bot ya tiene configurado otro administrador."
         )
+
         return
 
     if not admin:
@@ -77,24 +90,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         supplied = context.args[0] if context.args else ""
 
         if not supplied or supplied != ADMIN_SETUP_CODE:
+
             await update.message.reply_text(
                 "Para vincular este chat como administrador, "
                 "ejecuta /start seguido del código "
                 "ADMIN_SETUP_CODE configurado en el archivo .env."
             )
+
             return
 
         database.set_setting("admin_chat_id", str(uid))
 
     await update.message.reply_text(
-        "¡Bot conectado! Este chat recibirá los avisos privados "
-        "de catálogo agotado.\n\n"
+        "¡Bot conectado!\n\n"
+        "Este chat recibirá los avisos privados del catálogo.\n\n"
         "Comandos disponibles:\n"
         "/estado — resumen del catálogo\n"
-        "/pendientes — lista de juegos e IDs\n"
-        "/enlace ID_RAWG URL — asignar enlace al botón de descarga\n\n"
+        "/pendientes — lista de juegos e identificadores\n"
+        "/enlace GAME_ID URL — asignar enlace a un videojuego\n\n"
         "Ejemplo:\n"
-        "/enlace 3498 https://tu-enlace.example/juego"
+        "/enlace 10001 https://store.steampowered.com/"
     )
 
 
@@ -105,16 +120,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_only(update):
 
     if not is_private(update):
+
         if update.effective_message:
+
             await update.effective_message.reply_text(
                 "Usa este comando en el chat privado del bot."
             )
+
         return False
 
-    if database.setting("admin_chat_id") != str(update.effective_user.id):
+    if database.setting("admin_chat_id") != str(
+        update.effective_user.id
+    ):
+
         await update.message.reply_text(
             "Primero configura el chat administrador con /start."
         )
+
         return False
 
     return True
@@ -124,7 +146,10 @@ async def admin_only(update):
 # COMANDO /ESTADO
 # --------------------------------------------------
 
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def status(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if not await admin_only(update):
         return
@@ -132,11 +157,12 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     s = database.stats()
 
     await update.message.reply_text(
-        f"📊 Catálogo RAWG\n\n"
+        "📊 CATÁLOGO DE VIDEOJUEGOS\n\n"
         f"Total: {s['total']}\n"
         f"Pendientes: {s['pending']}\n"
         f"Publicados: {s['published']}\n\n"
-        f"Canal configurado: {CHANNEL_ID}"
+        f"Canal configurado: {CHANNEL_ID}\n\n"
+        "Base de datos: catálogo unificado"
     )
 
 
@@ -155,25 +181,51 @@ async def pending_command(
     games = database.pending_games(20)
 
     if not games:
+
         await update.message.reply_text(
             "No hay juegos pendientes en este momento."
         )
+
         return
 
     lines = [
-        "🎮 Próximos juegos pendientes (ID para /enlace):"
+        "🎮 PRÓXIMOS JUEGOS PENDIENTES",
+        "",
+        "El primer número es el game_id interno."
     ]
 
-    lines.extend(
-        f"{g['rawg_id']} — {g['name']}"
-        for g in games
-    )
+    for g in games:
+
+        identifiers = []
+
+        if g["rawg_id"] is not None:
+            identifiers.append(f"RAWG: {g['rawg_id']}")
+
+        if g["igdb_id"] is not None:
+            identifiers.append(f"IGDB: {g['igdb_id']}")
+
+        if g["steam_app_id"] is not None:
+            identifiers.append(f"Steam: {g['steam_app_id']}")
+
+        source_text = (
+            " | ".join(identifiers)
+            if identifiers
+            else "Sin identificador externo"
+        )
+
+        lines.append(
+            f"\n{g['game_id']} — {g['name']}\n"
+            f"   {source_text}"
+        )
 
     lines.append(
-        "\nEjemplo: /enlace ID https://tu-enlace.example"
+        "\nPara asignar un enlace:\n"
+        "/enlace GAME_ID URL"
     )
 
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text(
+        "\n".join(lines)
+    )
 
 
 # --------------------------------------------------
@@ -189,104 +241,139 @@ async def link_command(
         return
 
     if len(context.args) != 2:
+
         await update.message.reply_text(
-            "Formato: /enlace ID_RAWG URL\n"
-            "Ejemplo: /enlace 3498 https://tu-enlace.example/juego"
+            "Formato:\n"
+            "/enlace GAME_ID URL\n\n"
+            "Ejemplo:\n"
+            "/enlace 10001 https://store.steampowered.com/"
         )
+
         return
 
     try:
-        rawg_id = int(context.args[0])
+        game_id = int(context.args[0])
+
     except ValueError:
+
         await update.message.reply_text(
-            "El ID de RAWG debe ser un número."
+            "El GAME_ID debe ser un número."
         )
+
         return
 
     url = context.args[1].strip()
+
     parsed = urlparse(url)
 
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+
         await update.message.reply_text(
             "El enlace debe comenzar por https:// o http:// "
             "y ser una URL válida."
         )
+
         return
 
-    game = database.find_game(rawg_id)
+    game = database.find_game_by_game_id(game_id)
 
     if not game:
+
         await update.message.reply_text(
-            f"No encuentro el juego con ID RAWG {rawg_id}. "
-            "Consulta /estado o revisa el ID."
+            f"No encuentro ningún videojuego con game_id {game_id}."
         )
+
         return
 
-    database.set_download_link(rawg_id, url)
+    database.set_download_link_by_game_id(
+        game_id,
+        url
+    )
 
     await update.message.reply_text(
-        f"Enlace guardado para: {game['name']} "
-        f"(ID {rawg_id}). El botón aparecerá si todavía no se ha publicado."
+        f"Enlace guardado correctamente.\n\n"
+        f"Juego: {game['name']}\n"
+        f"GAME_ID: {game_id}\n\n"
+        "El botón utilizará este enlace cuando se publique."
     )
 
 
 # --------------------------------------------------
-# ENRIQUECIMIENTO ANTES DE PUBLICAR
+# ENRIQUECIMIENTO DE VIDEOJUEGOS
 # --------------------------------------------------
 
 def enrich_game_if_needed(game):
     """
-    Comprueba si el siguiente videojuego tiene su ficha detallada.
+    Enriquece los registros RAWG cuando sea posible.
 
-    Si todavía no se ha consultado RAWG, recupera sus datos,
-    los guarda en SQLite y marca la ficha como revisada.
-
-    Devuelve True cuando el juego puede pasar a publicación.
+    Los juegos procedentes exclusivamente de IGDB o Steam
+    no necesitan tener rawg_id para poder publicarse.
     """
 
-    rawg_id = int(game["rawg_id"])
+    rawg_id = game["rawg_id"]
 
-    # Ya se ha consultado anteriormente.
+    # Un juego sin RAWG puede publicarse con los datos disponibles.
+    if rawg_id is None:
+
+        log.info(
+            "Juego independiente de RAWG: %s (game_id %s).",
+            game["name"],
+            game["game_id"]
+        )
+
+        return True
+
+    rawg_id = int(rawg_id)
+
+    # La ficha ya fue consultada anteriormente.
     if game["details_checked_at"]:
         return True
 
     log.info(
-        "Ficha pendiente de enriquecer: %s (RAWG ID %s).",
+        "Ficha RAWG pendiente: %s (RAWG ID %s).",
         game["name"],
         rawg_id
     )
 
     try:
+
         details = rawg_catalog.fetch_game_details(rawg_id)
 
         if not details:
+
             log.warning(
-                "RAWG no devolvió detalles para %s (ID %s). "
-                "Se aplaza su publicación.",
-                game["name"],
-                rawg_id
+                "RAWG no devolvió detalles para %s. "
+                "Se publicará con la información disponible.",
+                game["name"]
             )
-            return False
+
+            return True
 
         details["id"] = details.get("id") or rawg_id
-        details["name"] = details.get("name") or game["name"]
+
+        details["name"] = (
+            details.get("name")
+            or game["name"]
+        )
 
         normalized = rawg_catalog.normalize_game(details)
 
         if not normalized.get("id") or not normalized.get("name"):
+
             log.warning(
-                "Ficha RAWG incompleta para ID %s. "
-                "Se aplaza la publicación.",
-                rawg_id
+                "Ficha RAWG incompleta para %s. "
+                "Se utilizará la información existente.",
+                game["name"]
             )
-            return False
+
+            return True
 
         database.add_games([normalized])
 
         database.mark_details_checked(rawg_id)
 
         log.info(
-            "Ficha enriquecida correctamente: %s (ID %s).",
+            "Ficha RAWG enriquecida: %s (ID %s).",
             game["name"],
             rawg_id
         )
@@ -294,12 +381,15 @@ def enrich_game_if_needed(game):
         return True
 
     except Exception:
+
         log.exception(
-            "Error enriqueciendo %s (RAWG ID %s).",
+            "Error enriqueciendo %s (RAWG ID %s). "
+            "Se continuará con los datos disponibles.",
             game["name"],
             rawg_id
         )
-        return False
+
+        return True
 
 
 # --------------------------------------------------
@@ -318,28 +408,166 @@ async def notify_exhausted(app):
 
     s = database.stats()
 
-    if (
-        s["total"] == 0
-        or s["pending"] > 0
-        or s["published"] == 0
-    ):
+    if s["total"] == 0 or s["pending"] > 0:
         return
+
+    if s["future"] > 0 or s["without_date"] > 0:
+
+        message = (
+            "ℹ️ SIN JUEGOS PUBLICABLES ACTUALMENTE\n\n"
+            f"Juegos publicados: {s['published']}\n"
+            f"Juegos futuros: {s['future']}\n"
+            f"Juegos sin fecha válida: {s['without_date']}\n\n"
+            "Las publicaciones quedan pausadas temporalmente. "
+            "El sistema continuará comprobando las fechas de "
+            "lanzamiento y las fuentes de catálogo configuradas. "
+            "Los juegos futuros podrán publicarse automáticamente "
+            "cuando llegue su fecha de lanzamiento."
+        )
+
+    else:
+
+        message = (
+            "⚠️ CATÁLOGO AGOTADO\n\n"
+            "Se han publicado todos los videojuegos disponibles.\n\n"
+            "El sistema continuará comprobando las fuentes "
+            "de catálogo configuradas. Cuando se incorporen "
+            "nuevos videojuegos compatibles con PC/Windows, "
+            "las publicaciones podrán reanudarse automáticamente."
+        )
 
     await app.bot.send_message(
         chat_id=int(admin),
-        text=(
-            "⚠️ CATÁLOGO AGOTADO\n\n"
-            "Se han publicado todos los juegos que había pendientes. "
-            "Las publicaciones quedan pausadas y no se repetirán juegos.\n\n"
-            "Seguiré consultando RAWG para detectar nuevos títulos "
-            "compatibles con PC/Windows. Cuando entren juegos nuevos, "
-            "reanudaré las publicaciones automáticamente."
-        )
+        text=message
     )
 
-    database.set_setting("exhaustion_notified", "1")
+    database.set_setting(
+        "exhaustion_notified",
+        "1"
+    )
 
-    log.info("Aviso privado de catálogo agotado enviado.")
+    log.info("Aviso de estado del catálogo enviado.")
+# --------------------------------------------------
+# --------------------------------------------------
+# CONSULTA AUTOMÁTICA DE IGDB
+# --------------------------------------------------
+
+async def refresh_igdb():
+
+    now = datetime.now(TZ)
+
+    # Evitar repetir consultas si IGDB ha fallado.
+    last_attempt = database.setting("igdb_last_attempt")
+
+    if last_attempt:
+        try:
+            last_dt = datetime.fromisoformat(last_attempt)
+
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=TZ)
+
+            if (now - last_dt).total_seconds() < 900:
+                return 0
+
+        except (ValueError, TypeError):
+            pass
+
+    # Consultar IGDB como máximo una vez cada 24 horas.
+    last_success = database.setting("igdb_last_check")
+
+    if last_success:
+        try:
+            last_dt = datetime.fromisoformat(last_success)
+
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=TZ)
+
+            if (now - last_dt).total_seconds() < 86400:
+                return 0
+
+        except (ValueError, TypeError):
+            pass
+
+    database.set_setting(
+        "igdb_last_attempt",
+        now.isoformat()
+    )
+
+    try:
+
+        before = database.stats()["total"]
+
+        log.info("Iniciando actualización del catálogo IGDB.")
+
+        await asyncio.to_thread(
+            igdb_catalog.import_catalog
+        )
+
+        after = database.stats()["total"]
+
+        database.set_setting(
+            "igdb_last_check",
+            datetime.now(TZ).isoformat()
+        )
+
+        added = max(0, after - before)
+
+        if added:
+
+            database.set_setting(
+                "exhaustion_notified",
+                "0"
+            )
+
+        log.info(
+            "Actualización IGDB finalizada. Nuevos registros: %s",
+            added
+        )
+
+        return added
+
+    except Exception:
+
+        log.exception(
+            "Error consultando IGDB. "
+            "Se reintentará posteriormente."
+        )
+
+        return 0
+# CONSULTA DE RAWG
+# --------------------------------------------------
+
+async def refresh_rawg():
+
+    try:
+
+        added = await asyncio.to_thread(
+            rawg_catalog.refresh_if_needed,
+            RAWG_FETCH_INTERVAL_SECONDS
+        )
+
+        if added:
+
+            database.set_setting(
+                "exhaustion_notified",
+                "0"
+            )
+
+            log.info(
+                "RAWG ha incorporado %s videojuegos.",
+                added
+            )
+
+        return added or 0
+
+    except Exception:
+
+        log.exception(
+            "Error consultando RAWG. "
+            "El planificador continuará funcionando."
+        )
+
+        return 0
 
 
 # --------------------------------------------------
@@ -348,29 +576,18 @@ async def notify_exhausted(app):
 
 async def scheduler(app):
 
-    log.info("Tarea de publicaciones iniciada.")
+    log.info("Planificador de publicaciones iniciado.")
 
     while True:
 
         try:
 
-            # Consultar RAWG cuando corresponda.
-            added = await asyncio.to_thread(
-                rawg_catalog.refresh_if_needed,
-                RAWG_FETCH_INTERVAL_SECONDS
-            )
+            # Consultar RAWG de manera independiente.
+            # Un error de RAWG no detiene las publicaciones.
 
-            if added:
+            await refresh_igdb()
 
-                database.set_setting(
-                    "exhaustion_notified",
-                    "0"
-                )
-
-                log.info(
-                    "Se han incorporado %s juegos nuevos.",
-                    added
-                )
+            await refresh_rawg()
 
             pending = database.pending_count()
 
@@ -380,45 +597,65 @@ async def scheduler(app):
 
             else:
 
+                # Hay juegos publicables: permitir futuros avisos.
+                if database.setting("exhaustion_notified") == "1":
+                    database.set_setting(
+                        "exhaustion_notified",
+                        "0"
+                    )
+
                 now = datetime.now(TZ)
+
                 scheduled_time = next_time(now)
 
                 if now >= scheduled_time:
 
                     log.info(
                         "Hora de publicación alcanzada. "
-                        "Juegos pendientes: %s",
+                        "Pendientes: %s",
                         pending
                     )
 
-                    # Obtener el juego que se publicaría a continuación.
                     game = database.next_game()
 
                     if not game:
+
                         await asyncio.sleep(10)
                         continue
 
-                    # Comprobar y enriquecer antes de publicar.
                     ready = await asyncio.to_thread(
                         enrich_game_if_needed,
                         game
                     )
 
                     if not ready:
+
+                        await asyncio.sleep(30)
+                        continue
+
+                    published = await publish(app.bot)
+
+                    if published:
+
+                        log.info(
+                            "Publicación completada: %s "
+                            "(game_id %s).",
+                            game["name"],
+                            game["game_id"]
+                        )
+
+                        if database.pending_count() == 0:
+                            await notify_exhausted(app)
+
+                    else:
+
                         log.warning(
-                            "Publicación aplazada para %s. "
-                            "Se volverá a comprobar más tarde.",
+                            "No se pudo completar la publicación "
+                            "de %s. Se reintentará posteriormente.",
                             game["name"]
                         )
 
                         await asyncio.sleep(60)
-                        continue
-
-                    # Solo llega aquí si la ficha está revisada.
-                    await publish(app.bot)
-
-                    if database.pending_count() == 0:
-                        await notify_exhausted(app)
 
         except asyncio.CancelledError:
 
@@ -431,7 +668,7 @@ async def scheduler(app):
         except Exception:
 
             log.exception(
-                "Error del programador. "
+                "Error del planificador. "
                 "Se reintentará en el siguiente ciclo."
             )
 
@@ -501,7 +738,7 @@ def main():
     app.add_handler(CommandHandler("enlace", link_command))
 
     log.info(
-        "Arrancando bot. Canal destino configurado: %s",
+        "Arrancando catálogo de videojuegos. Canal: %s",
         CHANNEL_ID
     )
 

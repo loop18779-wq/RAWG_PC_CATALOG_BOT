@@ -2,7 +2,8 @@
 import logging
 from datetime import datetime, timedelta
 from html import escape
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import requests
@@ -10,7 +11,7 @@ import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import RetryAfter, TimedOut, NetworkError, TelegramError
 
-import database
+import database_nueva as database
 
 from config import (
     CHANNEL_ID,
@@ -25,9 +26,6 @@ from config import (
 log = logging.getLogger(__name__)
 
 TZ = ZoneInfo(TIMEZONE)
-
-CONTACT_USERNAME = "Jhonscompany"
-CONTACT_MESSAGE = "Hola, me gustaría que me enviaras GRATIS la descarga completa del juego:"
 
 TELEGRAM_MESSAGE_LIMIT = 3900
 TELEGRAM_CAPTION_LIMIT = 1000
@@ -48,6 +46,27 @@ def _rating_text(value):
     try:
         return f"{float(value):.1f}/5"
     except (TypeError, ValueError):
+        return ""
+
+
+def _valid_url(value):
+    if not value:
+        return ""
+
+    value = str(value).strip()
+
+    try:
+        parsed = urlparse(value)
+
+        if parsed.scheme not in ("http", "https"):
+            return ""
+
+        if not parsed.netloc:
+            return ""
+
+        return value
+
+    except ValueError:
         return ""
 
 
@@ -73,10 +92,7 @@ def _split_long_line(line, limit):
 
 
 def split_message(message, limit=TELEGRAM_MESSAGE_LIMIT):
-    """
-    Divide mensajes largos en fragmentos.
-    Mantiene el contenido completo.
-    """
+    """Divide mensajes largos en fragmentos."""
 
     lines = message.split("\n")
     chunks = []
@@ -113,46 +129,50 @@ def build_post(g):
         f"🎮 <b>{name}</b>"
     ]
 
-
-
     release = _value(g, "release_date")
+
     if release:
         parts.append(
             f"📅 <b>Lanzamiento:</b> {escape(str(release))}"
         )
 
     genres = _value(g, "genres")
+
     if genres:
         parts.append(
             f"🎭 <b>Géneros:</b> {escape(str(genres))}"
         )
 
     platforms = _value(g, "platforms")
+
     if platforms:
         parts.append(
             f"🖥 <b>Plataformas:</b> {escape(str(platforms))}"
         )
 
     developer = _value(g, "developer")
+
     if developer:
         parts.append(
             f"🧑‍💻 <b>Desarrollador:</b> {escape(str(developer))}"
         )
 
     publisher = _value(g, "publisher")
+
     if publisher:
         parts.append(
             f"🏢 <b>Editor:</b> {escape(str(publisher))}"
         )
 
     esrb_rating = _value(g, "esrb_rating")
+
     if esrb_rating:
         parts.append(
             f"🔞 <b>Clasificación por edad:</b> "
             f"{escape(str(esrb_rating))}"
         )
 
-    # Valoración RAWG
+    # Valoración general, independientemente del proveedor.
     rating = _rating_text(_value(g, "rating"))
 
     try:
@@ -161,7 +181,7 @@ def build_post(g):
         ratings_count = 0
 
     if rating or ratings_count:
-        line = "⭐ <b>Valoración RAWG:</b> "
+        line = "⭐ <b>Valoración:</b> "
         line += escape(rating or "Sin nota")
 
         if ratings_count:
@@ -172,7 +192,6 @@ def build_post(g):
 
         parts.append(line)
 
-    # Distribución de valoraciones
     rating_breakdown = _value(g, "rating_breakdown")
 
     if rating_breakdown:
@@ -181,7 +200,6 @@ def build_post(g):
             f"{escape(str(rating_breakdown))}"
         )
 
-    # Metascore
     metacritic = _value(g, "metacritic")
 
     if metacritic:
@@ -189,7 +207,6 @@ def build_post(g):
             f"🎯 <b>Metascore:</b> {escape(str(metacritic))}/100"
         )
 
-    # Etiquetas
     tags = _value(g, "tags")
 
     if tags:
@@ -197,9 +214,6 @@ def build_post(g):
             "",
             f"🏷 <b>Etiquetas:</b> {escape(str(tags))}",
         ])
-
-    # Requisitos mínimos y recomendados completos.
-    # Solo se muestran cuando RAWG proporciona información.
 
     minimum = _value(g, "minimum")
     recommended = _value(g, "recommended")
@@ -225,49 +239,44 @@ def build_post(g):
 # BOTONES DE TELEGRAM
 # ============================================================
 
+
 def build_keyboard(g):
     game_name = str(_value(g, "name", "Videojuego"))
 
-    contact_url = (
-        "https://t.me/"
-        + CONTACT_USERNAME
-        + "?text="
-        + quote(
-            f"{CONTACT_MESSAGE}: {game_name}",
-            safe="",
-        )
+    # Chat privado con mensaje preparado.
+    private_message = "Quiero el juego completo y gratis listo para descargar."
+
+    access_url = (
+        "https://t.me/Jhonscompany?text="
+        + quote(private_message)
     )
 
     share_url = "https://t.me/share/url?" + urlencode({
-        "url": str(
-            _value(g, "url", "https://rawg.io/")
-        ),
+        "url": access_url,
         "text": f"🎮 {game_name}",
     })
 
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "⬇️ DESCARGAR JUEGO",
-                url=contact_url,
-            ),
-            InlineKeyboardButton(
-                "📤 COMPARTIR",
-                url=share_url,
-            ),
-        ]
-    ])
+    buttons = [
+        InlineKeyboardButton(
+            "🎮 VER JUEGO",
+            url=access_url,
+        ),
+        InlineKeyboardButton(
+            "📤 COMPARTIR",
+            url=share_url,
+        ),
+    ]
+
+    return InlineKeyboardMarkup([buttons])
+
 
 
 # ============================================================
-# DESCARGA DE IMÁGENES RAWG
+# DESCARGA DE IMÁGENES
 # ============================================================
 
 def download_image(image_url):
-    """
-    Descarga la imagen de RAWG en memoria.
-    No guarda archivos en el ordenador.
-    """
+    """Descarga una imagen en memoria, sin guardar archivos."""
 
     if not image_url:
         return None
@@ -277,7 +286,7 @@ def download_image(image_url):
             image_url,
             timeout=30,
             headers={
-                "User-Agent": "Mozilla/5.0 RAWG-PC-Catalog"
+                "User-Agent": "Mozilla/5.0 PC-Game-Catalog"
             },
         )
 
@@ -289,7 +298,7 @@ def download_image(image_url):
 
         if not content_type.startswith("image/"):
             log.warning(
-                "RAWG no devolvió una imagen válida: %s",
+                "El proveedor no devolvió una imagen válida: %s",
                 content_type,
             )
             return None
@@ -315,13 +324,15 @@ async def publish(bot):
         log.info("No hay videojuegos pendientes.")
         return False
 
+    game_id = int(g["game_id"])
+    rawg_id = _value(g, "rawg_id", None)
+
+    game_name = _value(g, "name", "Videojuego")
+    image_url = _value(g, "image")
+
     text = build_post(g)
     messages = split_message(text)
     keyboard = build_keyboard(g)
-
-    game_name = _value(g, "name", "Videojuego")
-    rawg_id = int(g["rawg_id"])
-    image_url = _value(g, "image")
 
     try:
         photo_sent = False
@@ -391,19 +402,22 @@ async def publish(bot):
                 )
 
         # ----------------------------------------------------
-        # MARCAR COMO PUBLICADO
+        # MARCAR COMO PUBLICADO MEDIANTE game_id
         # ----------------------------------------------------
 
-        database.mark_published(
-            rawg_id,
-            datetime.now(TZ).isoformat(timespec="seconds"),
+        timestamp = datetime.now(TZ).isoformat(timespec="seconds")
+
+        database.mark_published_by_game_id(
+            game_id,
+            timestamp,
         )
 
         log.info(
-            "Publicado %s (RAWG ID %s). Imagen enviada: %s. "
-            "Mensajes de texto: %s.",
+            "Publicado %s (game_id %s, RAWG ID %s). "
+            "Imagen enviada: %s. Mensajes de texto: %s.",
             game_name,
-            rawg_id,
+            game_id,
+            rawg_id if rawg_id is not None else "No disponible",
             photo_sent,
             0 if photo_sent and len(text) <= TELEGRAM_CAPTION_LIMIT
             else len(messages),
@@ -428,9 +442,17 @@ async def publish(bot):
 
     except TelegramError as error:
         log.error(
-            "Telegram rechazó la publicación RAWG %s: %s",
-            rawg_id,
+            "Telegram rechazó la publicación game_id %s: %s",
+            game_id,
             error,
+        )
+        return False
+
+    except Exception:
+        log.exception(
+            "Error inesperado al publicar game_id %s (%s).",
+            game_id,
+            game_name,
         )
         return False
 
@@ -445,6 +467,7 @@ def next_time(now=None):
     day = now.date().isoformat()
     tomorrow = now.date() + timedelta(days=1)
 
+    # Límite diario o fin del horario de publicación.
     if (
         database.published_today(day) >= PUBLICATIONS_PER_DAY
         or now.hour >= PUBLISH_END_HOUR
@@ -468,13 +491,29 @@ def next_time(now=None):
     if now < start:
         return start
 
-    last = database.last_published(day)
+    # La nueva función last_published() no recibe argumentos.
+    last = database.last_published()
 
     if last:
-        return max(
-            now,
-            datetime.fromisoformat(last)
-            + timedelta(minutes=PUBLISH_INTERVAL_MINUTES),
-        )
+        try:
+            last_datetime = datetime.fromisoformat(last)
+
+            if last_datetime.tzinfo is None:
+                last_datetime = last_datetime.replace(tzinfo=TZ)
+
+            # Solo considerar la última publicación del día actual.
+            if last_datetime.date() == now.date():
+                return max(
+                    now,
+                    last_datetime + timedelta(
+                        minutes=PUBLISH_INTERVAL_MINUTES
+                    ),
+                )
+
+        except (TypeError, ValueError):
+            log.warning(
+                "No se pudo interpretar la fecha de publicación: %s",
+                last,
+            )
 
     return now
