@@ -1,11 +1,28 @@
 
 import asyncio
 import logging
+from MENU import register_menu_handlers
 from pathlib import Path
+from MENU.menu_principal import show_main_menu
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from urllib.parse import urlparse
+from importlib import import_module
 
+english_module = import_module(
+    "MENU.CURSOS DE IDIOMAS.INGLES.registro"
+)
+
+register_english_storage_handlers = (
+    english_module.register_english_storage_handlers
+)
+publicity_module = import_module(
+    "MENU.CURSOS DE IDIOMAS.PUBLICIDAD.router"
+)
+
+register_publicity_handlers = (
+    publicity_module.register_publicity_handlers
+)
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from config import (
@@ -65,52 +82,48 @@ def is_private(update):
 # COMANDO /START
 # --------------------------------------------------
 
+
 async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
-
     if not is_private(update):
         return
 
     uid = update.effective_user.id
-
     admin = database.setting("admin_chat_id")
 
+    # USUARIO NORMAL: acceso al menú sin permisos administrativos.
     if admin and admin != str(uid):
-
-        await update.message.reply_text(
-            "Este bot ya tiene configurado otro administrador."
-        )
-
+        await show_main_menu(update, context)
         return
 
+    # PRIMERA CONFIGURACIÓN DEL ADMINISTRADOR.
     if not admin:
-
         supplied = context.args[0] if context.args else ""
 
         if not supplied or supplied != ADMIN_SETUP_CODE:
-
             await update.message.reply_text(
                 "Para vincular este chat como administrador, "
                 "ejecuta /start seguido del código "
                 "ADMIN_SETUP_CODE configurado en el archivo .env."
             )
-
             return
 
         database.set_setting("admin_chat_id", str(uid))
 
+    # ADMINISTRADOR.
     await update.message.reply_text(
-        "¡Bot conectado!\n\n"
-        "Este chat recibirá los avisos privados del catálogo.\n\n"
-        "Comandos disponibles:\n"
+        "¡Bot conectado como administrador!\n\n"
+        "Tienes acceso al menú principal y a las funciones "
+        "administrativas.\n\n"
+        "Comandos administrativos:\n"
         "/estado — resumen del catálogo\n"
         "/pendientes — lista de juegos e identificadores\n"
-        "/enlace GAME_ID URL — asignar enlace a un videojuego\n\n"
-        "Ejemplo:\n"
-        "/enlace 10001 https://store.steampowered.com/"
+        "/enlace GAME_ID URL — asignar enlace a un videojuego\n"
+        "/menu — abrir el menú principal"
     )
+
 
 
 # --------------------------------------------------
@@ -730,8 +743,16 @@ def main():
         .post_init(post_init)
         .post_stop(post_stop)
         .build()
-    )
 
+    )
+    # Registrar el sistema de publicidad
+    register_publicity_handlers(app)
+
+    # Registrar el almacenamiento del curso de inglés
+    register_english_storage_handlers(app)
+
+    # Registrar los menús principales
+    register_menu_handlers(app)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("estado", status))
     app.add_handler(CommandHandler("pendientes", pending_command))
