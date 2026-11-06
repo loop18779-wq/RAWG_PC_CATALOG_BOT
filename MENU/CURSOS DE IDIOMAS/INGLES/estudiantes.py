@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 from importlib import import_module
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.error import TelegramError
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -99,7 +99,22 @@ async def show_levels(query):
         reply_markup=levels_keyboard()
     )
 
+async def send_navigation_menu(bot, user_id):
+    try:
+        await bot.send_message(
+            chat_id=user_id,
+            text=(
+                "📚 CURSO DE INGLÉS\n\n"
+                "¿Qué nivel deseas continuar estudiando?"
+            ),
+            reply_markup=levels_keyboard()
+        )
 
+    except TelegramError:
+        log.exception(
+            "No se pudo mostrar el menú de navegación al usuario %s",
+            user_id
+        )
 async def show_blocks(query, level):
     if level not in LEVEL_NAMES:
         await query.answer("Nivel no válido.", show_alert=True)
@@ -226,19 +241,35 @@ def advertising_keyboard(group, class_code):
 
 
 async def show_advertisement(query, class_code, group):
-    await query.edit_message_text(
+    message_text = (
         "📢 PARA CONTINUAR CON TU CURSO\n\n"
         "Debes unirte al siguiente grupo o canal:\n\n"
         f"📌 {group['title']}\n\n"
         "1. Pulsa el botón para unirte.\n"
         "2. Una vez dentro, vuelve aquí.\n"
         "3. Pulsa «Verificar y continuar».\n\n"
-        "Comprobaremos tu membresía automáticamente.",
-        reply_markup=advertising_keyboard(
-            group,
-            class_code
-        )
+        "Comprobaremos tu membresía automáticamente."
     )
+
+    try:
+        await query.edit_message_text(
+            message_text,
+            reply_markup=advertising_keyboard(
+                group,
+                class_code
+            )
+        )
+
+    except BadRequest as error:
+        if "Message is not modified" not in str(error):
+            raise
+
+        await query.message.reply_text(
+            "⚠️ Todavía no detectamos que pertenezcas "
+            "al grupo o canal indicado.\n\n"
+            "Únete primero y vuelve a pulsar "
+            "«Verificar y continuar»."
+        )
 async def send_lesson(query, context, class_code):
 
     lesson = get_lesson(class_code)
@@ -314,6 +345,10 @@ async def send_lesson(query, context, class_code):
         log.info(
             "Clase %s enviada al usuario %s",
             class_code,
+            query.from_user.id
+        )
+        await send_navigation_menu(
+            context.bot,
             query.from_user.id
         )
 
@@ -402,6 +437,10 @@ async def verify_ad_callback(update, context):
         log.info(
             "Publicidad superada. Clase %s entregada a %s.",
             class_code,
+            query.from_user.id
+        )
+        await send_navigation_menu(
+            context.bot,
             query.from_user.id
         )
 

@@ -8,14 +8,30 @@ from datetime import datetime, date
 ROOT = Path(__file__).resolve().parent
 
 # Permite seleccionar una base de datos de prueba sin modificar la original.
-DB = Path(
-    os.getenv(
-        "CATALOG_DB_PATH",
-        str(ROOT / "data" / "rawg_catalog.db")
+CONFIGURED_DB = os.getenv("CATALOG_DB_PATH")
+
+if CONFIGURED_DB:
+    # Si existe una ruta configurada, respetarla.
+    DB = Path(CONFIGURED_DB)
+else:
+    # Buscar automáticamente la última base migrada.
+    BACKUPS_DIR = ROOT / "backups"
+
+    migrated_databases = sorted(
+        BACKUPS_DIR.glob("rawg_catalog_migracion_*.db"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True
     )
-)
+
+    if migrated_databases:
+        DB = migrated_databases[0]
+    else:
+        # Compatibilidad si todavía no existe una base migrada.
+        DB = ROOT / "data" / "rawg_catalog.db"
 
 DB.parent.mkdir(parents=True, exist_ok=True)
+
+print(f"BASE DE DATOS SELECCIONADA: {DB}")
 
 
 def conn():
