@@ -1,5 +1,6 @@
 
 import logging
+from urllib.parse import quote
 from datetime import datetime, timedelta
 from html import escape
 from urllib.parse import urlencode
